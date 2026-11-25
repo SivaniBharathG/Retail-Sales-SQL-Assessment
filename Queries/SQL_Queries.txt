@@ -1,0 +1,366 @@
+-- Q1 Standardize store regions
+
+CREATE TABLE Regions (
+RegionID NUMBER PRIMARY KEY,
+RegionName VARCHAR2(50) UNIQUE
+);
+
+INSERT ALL
+INTO Regions VALUES (1, 'North')
+INTO Regions VALUES (2, 'South')
+INTO Regions VALUES (3, 'West')
+SELECT 1 FROM DUAL;
+
+ALTER TABLE Stores
+ADD RegionID NUMBER;
+
+UPDATE Stores
+SET RegionID = CASE
+WHEN UPPER(TRIM(RegionRaw)) IN ('N', 'NORTH') THEN 1
+WHEN UPPER(TRIM(RegionRaw)) IN ('S', 'SOUTH') THEN 2
+WHEN UPPER(TRIM(RegionRaw)) IN ('W', 'WEST') THEN 3
+END;
+
+SELECT
+S.StoreID,
+S.StoreName,
+S.RegionRaw,
+R.RegionID,
+R.RegionName
+FROM Stores S
+JOIN Regions R
+ON S.RegionID = R.RegionID
+ORDER BY S.StoreID;
+
+SELECT
+StoreID,
+StoreName,
+RegionRaw
+FROM Stores
+WHERE RegionID IS NULL;
+
+
+-- Q2 Remove duplicate order lines
+
+CREATE TABLE OrderItems_Work AS
+SELECT * FROM OrderItems;
+
+SELECT
+OrderItemID,
+COUNT(*) AS DuplicateCount
+FROM OrderItems_Work
+GROUP BY OrderItemID
+HAVING COUNT(*) > 1;
+
+DELETE FROM OrderItems_Work
+WHERE ROWID NOT IN (
+SELECT MAX(ROWID)
+FROM OrderItems_Work
+GROUP BY OrderItemID
+);
+
+
+-- Q3 ER diagram
+-- No SQL query required
+
+
+-- Q4 Orders with matching customers
+
+SELECT
+O.OrderID,
+O.CustomerID,
+C.CustomerName
+FROM Orders O
+INNER JOIN Customers C
+ON O.CustomerID = C.CustomerID
+ORDER BY O.OrderID;
+
+
+-- Q5 Orders with unmatched customer IDs
+
+SELECT
+O.OrderID,
+O.CustomerID
+FROM Orders O
+LEFT JOIN Customers C
+ON O.CustomerID = C.CustomerID
+WHERE C.CustomerID IS NULL
+ORDER BY O.OrderID;
+
+
+-- Q6 Customers with no orders
+
+SELECT
+C.CustomerID,
+C.CustomerName
+FROM Customers C
+LEFT JOIN Orders O
+ON C.CustomerID = O.CustomerID
+WHERE O.OrderID IS NULL
+ORDER BY C.CustomerID;
+
+
+-- Q7 Order lines with multiple returns
+
+SELECT
+OrderItemID,
+COUNT(ReturnID) AS ReturnTransactionCount,
+SUM(ReturnQuantity) AS TotalReturnedUnits
+FROM Returns
+GROUP BY OrderItemID
+HAVING COUNT(ReturnID) > 1
+ORDER BY OrderItemID;
+
+
+-- Q8 Regional sales and returns
+
+SELECT
+R.RegionName,
+COUNT(DISTINCT O.OrderID) AS CompletedOrderCount,
+SUM(OI.Quantity * OI.UnitPrice) AS GrossSales
+FROM Orders O
+JOIN Stores S
+ON O.StoreID = S.StoreID
+JOIN Regions R
+ON S.RegionID = R.RegionID
+JOIN OrderItems_Work OI
+ON O.OrderID = OI.OrderID
+WHERE O.OrderStatus = 'Completed'
+AND O.OrderDate >= DATE '2026-10-01'
+AND O.OrderDate < DATE '2026-11-01'
+GROUP BY R.RegionName
+ORDER BY R.RegionName;
+
+SELECT
+R.RegionName,
+SUM(RT.ReturnQuantity * OI.UnitPrice) AS ReturnValue
+FROM Returns RT
+JOIN OrderItems_Work OI
+ON RT.OrderItemID = OI.OrderItemID
+JOIN Orders O
+ON OI.OrderID = O.OrderID
+JOIN Stores S
+ON O.StoreID = S.StoreID
+JOIN Regions R
+ON S.RegionID = R.RegionID
+WHERE O.OrderStatus = 'Completed'
+AND RT.ReturnDate >= DATE '2026-10-01'
+AND RT.ReturnDate < DATE '2026-11-01'
+GROUP BY R.RegionName
+ORDER BY R.RegionName;
+
+
+-- Q9 Compare the regions
+
+WITH RegionalGross AS (
+SELECT
+R.RegionName,
+SUM(OI.Quantity * OI.UnitPrice) AS GrossSales
+FROM Orders O
+JOIN Stores S
+ON O.StoreID = S.StoreID
+JOIN Regions R
+ON S.RegionID = R.RegionID
+JOIN OrderItems_Work OI
+ON O.OrderID = OI.OrderID
+WHERE O.OrderStatus = 'Completed'
+AND O.OrderDate >= DATE '2026-10-01'
+AND O.OrderDate < DATE '2026-11-01'
+GROUP BY R.RegionName
+),
+RegionalReturns AS (
+SELECT
+R.RegionName,
+SUM(RT.ReturnQuantity * OI.UnitPrice) AS ReturnValue
+FROM Returns RT
+JOIN OrderItems_Work OI
+ON RT.OrderItemID = OI.OrderItemID
+JOIN Orders O
+ON OI.OrderID = O.OrderID
+JOIN Stores S
+ON O.StoreID = S.StoreID
+JOIN Regions R
+ON S.RegionID = R.RegionID
+WHERE O.OrderStatus = 'Completed'
+AND RT.ReturnDate >= DATE '2026-10-01'
+AND RT.ReturnDate < DATE '2026-11-01'
+GROUP BY R.RegionName
+),
+RegionalNet AS (
+SELECT
+G.RegionName,
+G.GrossSales,
+NVL(R.ReturnValue, 0) AS ReturnValue,
+G.GrossSales - NVL(R.ReturnValue, 0) AS NetSales
+FROM RegionalGross G
+LEFT JOIN RegionalReturns R
+ON G.RegionName = R.RegionName
+)
+SELECT
+RegionName,
+GrossSales,
+ReturnValue,
+NetSales,
+RANK() OVER (ORDER BY GrossSales DESC) AS GrossSalesRank,
+RANK() OVER (ORDER BY NetSales DESC) AS NetSalesRank,
+NetSales - LEAD(NetSales) OVER (ORDER BY NetSales DESC) AS DifferenceFromNext
+FROM RegionalNet
+ORDER BY NetSales DESC;
+
+
+-- Q10 Compare stores within each region
+
+SELECT
+R.RegionName,
+S.StoreID,
+S.StoreName,
+SUM(OI.Quantity * OI.UnitPrice) AS GrossSales
+FROM Orders O
+JOIN Stores S
+ON O.StoreID = S.StoreID
+JOIN Regions R
+ON S.RegionID = R.RegionID
+JOIN OrderItems_Work OI
+ON O.OrderID = OI.OrderID
+WHERE O.OrderStatus = 'Completed'
+AND O.OrderDate >= DATE '2026-10-01'
+AND O.OrderDate < DATE '2026-11-01'
+GROUP BY R.RegionName, S.StoreID, S.StoreName
+ORDER BY R.RegionName, S.StoreID;
+
+SELECT
+R.RegionName,
+S.StoreID,
+S.StoreName,
+SUM(RT.ReturnQuantity * OI.UnitPrice) AS ReturnValue
+FROM Returns RT
+JOIN OrderItems_Work OI
+ON RT.OrderItemID = OI.OrderItemID
+JOIN Orders O
+ON OI.OrderID = O.OrderID
+JOIN Stores S
+ON O.StoreID = S.StoreID
+JOIN Regions R
+ON S.RegionID = R.RegionID
+WHERE O.OrderStatus = 'Completed'
+AND RT.ReturnDate >= DATE '2026-10-01'
+AND RT.ReturnDate < DATE '2026-11-01'
+GROUP BY R.RegionName, S.StoreID, S.StoreName
+ORDER BY R.RegionName, S.StoreID;
+
+WITH StoreGross AS (
+SELECT
+S.StoreID,
+S.StoreName,
+R.RegionName,
+SUM(OI.Quantity * OI.UnitPrice) AS GrossSales
+FROM Orders O
+JOIN Stores S
+ON O.StoreID = S.StoreID
+JOIN Regions R
+ON S.RegionID = R.RegionID
+JOIN OrderItems_Work OI
+ON O.OrderID = OI.OrderID
+WHERE O.OrderStatus = 'Completed'
+AND O.OrderDate >= DATE '2026-10-01'
+AND O.OrderDate < DATE '2026-11-01'
+GROUP BY S.StoreID, S.StoreName, R.RegionName
+),
+StoreReturns AS (
+SELECT
+S.StoreID,
+SUM(RT.ReturnQuantity * OI.UnitPrice) AS ReturnValue
+FROM Returns RT
+JOIN OrderItems_Work OI
+ON RT.OrderItemID = OI.OrderItemID
+JOIN Orders O
+ON OI.OrderID = O.OrderID
+JOIN Stores S
+ON O.StoreID = S.StoreID
+WHERE O.OrderStatus = 'Completed'
+AND RT.ReturnDate >= DATE '2026-10-01'
+AND RT.ReturnDate < DATE '2026-11-01'
+GROUP BY S.StoreID
+),
+StoreNet AS (
+SELECT
+G.RegionName,
+G.StoreID,
+G.StoreName,
+G.GrossSales,
+NVL(R.ReturnValue, 0) AS ReturnValue,
+G.GrossSales - NVL(R.ReturnValue, 0) AS NetSales
+FROM StoreGross G
+LEFT JOIN StoreReturns R
+ON G.StoreID = R.StoreID
+),
+RankedStores AS (
+SELECT
+StoreNet.*,
+RANK() OVER (
+PARTITION BY RegionName
+ORDER BY NetSales DESC
+) AS StoreRank,
+SUM(NetSales) OVER (
+PARTITION BY RegionName
+) AS RegionNetSales
+FROM StoreNet
+)
+SELECT
+RegionName,
+StoreID,
+StoreName,
+GrossSales,
+ReturnValue,
+NetSales,
+ROUND(NetSales * 100 / NULLIF(RegionNetSales, 0), 2) AS RegionNetSalesShare
+FROM RankedStores
+WHERE StoreRank = 1
+ORDER BY RegionName, StoreID;
+
+
+-- Q11 Find the category with the highest return value
+
+SELECT
+R.RegionName,
+SUM(RT.ReturnQuantity * OI.UnitPrice) AS ReturnValue
+FROM Returns RT
+JOIN OrderItems_Work OI
+ON RT.OrderItemID = OI.OrderItemID
+JOIN Orders O
+ON OI.OrderID = O.OrderID
+JOIN Stores S
+ON O.StoreID = S.StoreID
+JOIN Regions R
+ON S.RegionID = R.RegionID
+WHERE O.OrderStatus = 'Completed'
+AND RT.ReturnDate >= DATE '2026-10-01'
+AND RT.ReturnDate < DATE '2026-11-01'
+GROUP BY R.RegionName
+ORDER BY ReturnValue DESC;
+
+SELECT
+P.Category,
+SUM(RT.ReturnQuantity * OI.UnitPrice) AS ReturnValue,
+ROUND(
+SUM(RT.ReturnQuantity * OI.UnitPrice) * 100 /
+SUM(SUM(RT.ReturnQuantity * OI.UnitPrice)) OVER (),
+2
+) AS ReturnValueShare
+FROM Returns RT
+JOIN OrderItems_Work OI
+ON RT.OrderItemID = OI.OrderItemID
+JOIN Products P
+ON OI.ProductID = P.ProductID
+JOIN Orders O
+ON OI.OrderID = O.OrderID
+JOIN Stores S
+ON O.StoreID = S.StoreID
+JOIN Regions R
+ON S.RegionID = R.RegionID
+WHERE O.OrderStatus = 'Completed'
+AND RT.ReturnDate >= DATE '2026-10-01'
+AND RT.ReturnDate < DATE '2026-11-01'
+AND R.RegionName = 'North'
+GROUP BY P.Category
+ORDER BY ReturnValue DESC;

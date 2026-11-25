@@ -1,0 +1,4 @@
+RETAIL SALES SQL ASSESSMENT
+
+SQL Platform: Oracle Database
+SQL IDE: Oracle SQL Developer
